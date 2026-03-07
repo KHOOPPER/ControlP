@@ -57,6 +57,17 @@ export default function NewWorker() {
     };
 
     /**
+     * Maneja cambios en el campo de DUI, formateando automáticamente con guion.
+     */
+    const handleDuiChange = (e) => {
+        let value = e.target.value.replace(/\D/g, '');
+        if (value.length > 8) {
+            value = `${value.substring(0, 8)}-${value.substring(8, 9)}`;
+        }
+        setFormData((prev) => ({ ...prev, duiNumber: value }));
+    };
+
+    /**
      * Callback para recibir archivos desde el componente FileUpload.
      * 
      * @param {string} id - Identificador del campo del archivo.
@@ -227,7 +238,7 @@ export default function NewWorker() {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label htmlFor="duiNumber" className="block text-sm font-medium text-gray-700 mb-1">Número de DUI *</label>
-                                    <input id="duiNumber" type="text" name="duiNumber" value={formData.duiNumber} onChange={handleTextChange} className="w-full border border-gray-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition-shadow" placeholder="00000000-0" required />
+                                    <input id="duiNumber" type="text" name="duiNumber" value={formData.duiNumber} onChange={handleDuiChange} className="w-full border border-gray-300 rounded-lg px-4 py-2.5 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition-shadow" placeholder="00000000-0" maxLength="10" required />
                                 </div>
                                 <div>
                                     <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700 mb-1">Teléfono Personal *</label>

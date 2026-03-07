@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { Loader2, ArrowLeft, Download, ShieldAlert, Phone, MapPin, UserCheck, AlertTriangle } from 'lucide-react';
 import { LazyMotion, domAnimation, m } from 'framer-motion';
+import toast from 'react-hot-toast';
 
 /**
  * @fileoverview WorkerDetails.jsx - Perfil Detallado del Colaborador.
@@ -81,9 +82,16 @@ export default function WorkerDetails() {
      * Importa dinámicamente jsPDF y dispara la construcción del documento.
      */
     const handleDownloadPdf = async () => {
-        const { jsPDF } = await import('jspdf');
-        const doc = new jsPDF('p', 'mm', 'a4');
-        buildPdf(doc);
+        const loadingToast = toast.loading('Generando PDF...');
+        try {
+            const { jsPDF } = await import('jspdf');
+            const doc = new jsPDF('p', 'mm', 'a4');
+            await buildPdf(doc);
+            toast.success('PDF generado exitosamente', { id: loadingToast });
+        } catch (error) {
+            console.error('Error generando el PDF:', error);
+            toast.error('Ocurrió un error al generar el PDF', { id: loadingToast });
+        }
     };
 
     /**
@@ -91,60 +99,180 @@ export default function WorkerDetails() {
      * 
      * @param {Object} doc - Instancia de jsPDF.
      */
-    const buildPdf = (doc) => {
+    const buildPdf = async (doc) => {
         const pageWidth = 210;
         const margin = 20;
         const contentWidth = pageWidth - margin * 2;
         let y = 25;
 
-        /** Helper para añadir líneas de texto con control de salto de página. */
-        const addLine = (text, fontSize = 11, isBold = false) => {
+        // Cargar configuración de la empresa
+        let companySettings = { companyName: 'ControlP - Registro de Personal', logoDataUrl: null };
+        try {
+            const s = JSON.parse(localStorage.getItem('controlp_settings'));
+            if (s) {
+                if (s.companyName) companySettings.companyName = s.companyName;
+                if (s.logoDataUrl) companySettings.logoDataUrl = s.logoDataUrl;
+            }
+        } catch (e) {
+            console.warn('Error cargando configuración de la empresa para el PDF', e);
+        }
+
+        // --- HEADER ESTILO CORPORATIVO ---
+        let startY = 15;
+
+        if (companySettings.logoDataUrl) {
+            try {
+                const imgProps = doc.getImageProperties(companySettings.logoDataUrl);
+                const targetHeight = 16;
+                const calculatedWidth = (imgProps.width * targetHeight) / imgProps.height;
+                const finalWidth = Math.min(calculatedWidth, 50);
+
+                doc.addImage(companySettings.logoDataUrl, 'JPEG', margin, startY, finalWidth, targetHeight, '', 'FAST');
+
+                const textXPos = margin + finalWidth + 4;
+                doc.setFontSize(16);
+                doc.setFont('helvetica', 'bold');
+                doc.setTextColor(0, 0, 0);
+                doc.text(companySettings.companyName.toUpperCase(), textXPos, startY + 10);
+                doc.setFontSize(12);
+                doc.setFont('helvetica', 'normal');
+                doc.setTextColor(100, 100, 100);
+                doc.text('Perfil del Trabajador', textXPos, startY + 16);
+            } catch (e) {
+                doc.setFontSize(18);
+                doc.setFont('helvetica', 'bold');
+                doc.setTextColor(0, 0, 0);
+                doc.text(companySettings.companyName.toUpperCase(), margin, startY + 8);
+                doc.setFontSize(12);
+                doc.setFont('helvetica', 'normal');
+                doc.setTextColor(100, 100, 100);
+                doc.text('Perfil del Trabajador', margin, startY + 14);
+            }
+        } else {
+            doc.setFillColor(0, 0, 0);
+            doc.rect(margin, startY, 40, 12, 'F');
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(255, 255, 255);
+
+            const dispName = companySettings.companyName !== 'ControlP - Registro de Personal' ? companySettings.companyName : 'ControlP';
+            doc.text(dispName.substring(0, 15), margin + 2, startY + 8);
+
+            doc.setTextColor(0, 0, 0);
+            doc.setFontSize(16);
+            doc.text('PERFIL DEL TRABAJADOR', margin + 46, startY + 8);
+        }
+
+        // Línea separadora superior
+        doc.setLineWidth(0.5);
+        doc.line(margin, 42, pageWidth - margin, 42);
+
+        y = 52; // Mover 'y' inicial más abajo por el nuevo header
+
+        // Función para cargar imagen a Base64
+        const fetchAsBase64 = async (url) => {
+            if (!url) return null;
+            try {
+                const res = await fetch(url);
+                const blob = await res.blob();
+                return await new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.readAsDataURL(blob);
+                });
+            } catch (e) {
+                console.warn('Could not fetch image for PDF', url);
+                return null;
+            }
+        };
+
+        // Renderizar Foto de Perfil si existe
+        if (worker.profile_picture_url) {
+            const profileImgData = await fetchAsBase64(worker.profile_picture_url);
+            if (profileImgData) {
+                try {
+                    const avatarSize = 35;
+                    // Dibujar avatar a la derecha (pageWidth - margin - avatarSize)
+                    const xPos = pageWidth - margin - avatarSize;
+                    doc.addImage(profileImgData, 'JPEG', xPos, 50, avatarSize, avatarSize, '', 'MEDIUM');
+                } catch (e) {
+                    // Ignorar si falla la carga de imagen
+                }
+            }
+        }
+
+        // Helper para añadir líneas de texto con control de salto de página
+        const addLine = (text, fontSize = 10, isBold = false, textColor = [0, 0, 0]) => {
             doc.setFontSize(fontSize);
             doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+            doc.setTextColor(textColor[0], textColor[1], textColor[2]);
             const lines = doc.splitTextToSize(text, contentWidth);
             lines.forEach(line => {
                 if (y > 275) { doc.addPage(); y = 20; }
                 doc.text(line, margin, y);
-                y += fontSize * 0.5;
+                y += fontSize * 0.4;
             });
         };
 
-        const addSpacer = (h = 4) => { y += h; };
-        const addSeparator = () => {
+        // Helper para campos de datos clave/valor sin superposición
+        const addField = (label, value, isBoldValue = false) => {
             if (y > 275) { doc.addPage(); y = 20; }
-            doc.setDrawColor(200);
-            doc.line(margin, y, pageWidth - margin, y);
-            y += 6;
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(150, 150, 150);
+            doc.text(label.toUpperCase(), margin, y);
+            y += 4;
+
+            doc.setFontSize(10);
+            doc.setFont('helvetica', isBoldValue ? 'bold' : 'normal');
+            doc.setTextColor(0, 0, 0);
+            const valueLines = doc.splitTextToSize(value || '-', contentWidth - (worker.profile_picture_url ? 45 : 0)); // Evitar superponer con el avatar
+            valueLines.forEach(line => {
+                if (y > 275) { doc.addPage(); y = 20; }
+                doc.text(line, margin, y);
+                y += 5;
+            });
+            y += 3; // Extra space
         };
 
-        addLine('PERFIL DEL TRABAJADOR', 18, true);
-        addLine('ControlP - Registro de Personal', 10);
-        addSpacer(2);
+        const addSpacer = (h = 5) => { y += h; };
+        const addSeparator = () => {
+            if (y > 275) { doc.addPage(); y = 20; }
+            doc.setDrawColor(220);
+            doc.setLineWidth(0.2);
+            doc.line(margin, y, pageWidth - margin, y);
+            y += 8;
+        };
+
+        addLine('DATOS PERSONALES', 11, true, [100, 100, 100]);
+        addSpacer(4);
+        addField('Nombre', `${worker.first_name} ${worker.last_name}`, true);
+        addField('DUI', worker.dui_number);
+        addField('Teléfono', `+503 ${worker.phone_number}`);
+        addField('Dirección Actual', worker.current_address);
+
+        // Ensure y is pushed past the avatar if needed
+        if (worker.profile_picture_url && y < 95) {
+            y = 95;
+        } else {
+            addSpacer(2);
+        }
         addSeparator();
 
-        addLine('DATOS PERSONALES', 13, true);
-        addSpacer(2);
-        addLine(`Nombre: ${worker.first_name} ${worker.last_name}`);
-        addLine(`DUI: ${worker.dui_number}`);
-        addLine(`Teléfono: +503 ${worker.phone_number}`);
-        addLine(`Dirección: ${worker.current_address}`);
-        addSpacer(2);
-        addSeparator();
-
-        addLine('CONTACTO DE EMERGENCIA', 13, true);
-        addSpacer(2);
-        addLine(`Nombre: ${worker.emergency_contact_name}`);
-        addLine(`Teléfono: +503 ${worker.emergency_contact_phone}`);
+        addLine('CONTACTO DE EMERGENCIA', 11, true, [100, 100, 100]);
+        addSpacer(4);
+        addField('Nombre de Contacto', worker.emergency_contact_name);
+        addField('Teléfono', `+503 ${worker.emergency_contact_phone}`);
 
         if (worker.allergies_comments) {
             addSpacer(2);
-            addLine(`Condiciones Médicas / Alergias: ${worker.allergies_comments}`);
+            addField('Condiciones Médicas / Alergias', worker.allergies_comments);
         }
         addSpacer(2);
         addSeparator();
 
-        addLine('DOCUMENTOS ADJUNTOS', 13, true);
-        addSpacer(2);
+        addLine('DOCUMENTACION Y EXPEDIENTE', 11, true, [100, 100, 100]);
+        addSpacer(4);
         const docs = [
             { label: 'DUI Frontal', url: worker.dui_front_url },
             { label: 'DUI Reverso', url: worker.dui_back_url },
@@ -154,18 +282,83 @@ export default function WorkerDetails() {
             { label: 'Antecedentes Penales', url: worker.antecedentes_url },
         ];
 
-        docs.forEach(d => {
+        for (const d of docs) {
             if (d.url) {
-                addLine(`✓ ${d.label}`, 10);
+                doc.setTextColor(34, 197, 94); // Green
+                doc.text('✓', margin, y);
+                addLine(`   ${d.label}`, 10, false, [0, 0, 0]);
+                y -= 1;
             } else {
-                addLine(`✗ ${d.label} (no adjunto)`, 10);
+                doc.setTextColor(239, 68, 68); // Red
+                doc.text('✗', margin, y);
+                addLine(`   ${d.label}`, 10, false, [150, 150, 150]);
+                y -= 1;
             }
-        });
+        }
 
-        addSpacer(6);
+        // --- RENDERIZAR IMÁGENES DE DOCUMENTOS ---
+        const docsWithImages = docs.filter(d => d.url && !d.url.toLowerCase().includes('.pdf'));
+
+        if (docsWithImages.length > 0) {
+            addSpacer(8);
+            addSeparator();
+            addLine('ANEXOS DE EXPEDIENTE', 11, true, [100, 100, 100]);
+            addSpacer(6);
+
+            for (const d of docsWithImages) {
+                const imgData = await fetchAsBase64(d.url);
+                if (imgData) {
+                    try {
+                        const imgProps = doc.getImageProperties(imgData);
+                        let tWidth = imgProps.width;
+                        let tHeight = imgProps.height;
+                        const maxW = contentWidth * 0.85; // Limitar el ancho máximo a 85% para centrar
+                        const maxH = 100; // Altura máxima permitida para anexos
+
+                        // Escalar proporciones
+                        if (tWidth > maxW) {
+                            tHeight = (tHeight * maxW) / tWidth;
+                            tWidth = maxW;
+                        }
+                        if (tHeight > maxH) {
+                            tWidth = (tWidth * maxH) / tHeight;
+                            tHeight = maxH;
+                        }
+
+                        // Comprobar espacio restante en la página
+                        // Reservamos espacio para el título y la imagen (aprox tHeight + 20)
+                        if (y + tHeight + 20 > 280) {
+                            doc.addPage();
+                            y = 20;
+                        }
+
+                        doc.setFontSize(10);
+                        doc.setFont('helvetica', 'bold');
+                        doc.setTextColor(0, 0, 0);
+                        doc.text(d.label, margin, y);
+                        y += 6;
+
+                        // Centrar imagen
+                        const xOffset = margin + (contentWidth - tWidth) / 2;
+
+                        // Dibujar borde sutil alrededor de la imagen
+                        doc.setDrawColor(220);
+                        doc.setLineWidth(0.5);
+                        doc.rect(xOffset, y, tWidth, tHeight);
+                        doc.addImage(imgData, 'JPEG', xOffset, y, tWidth, tHeight, '', 'MEDIUM');
+
+                        y += tHeight + 15; // Espacio después de la imagen
+                    } catch (e) {
+                        console.warn(`Error rendering image for ${d.label}`, e);
+                    }
+                }
+            }
+        }
+
+        addSpacer(12);
         addSeparator();
         doc.setFontSize(8);
-        doc.setTextColor(150);
+        doc.setTextColor(150, 150, 150);
         doc.text(`Generado el ${new Date().toLocaleDateString('es-SV')} a las ${new Date().toLocaleTimeString('es-SV')}`, margin, y);
 
         doc.save(`${worker.first_name}_${worker.last_name}_Perfil.pdf`);

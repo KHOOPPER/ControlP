@@ -4,6 +4,7 @@ import { Loader2, Users, Search, ChevronRight, Pencil, Trash2, AlertTriangle, X,
 import { Link } from 'react-router-dom';
 import { LazyMotion, domAnimation, m } from 'framer-motion';
 import toast from 'react-hot-toast';
+import FileUpload from '../components/FileUpload';
 
 /**
  * @fileoverview WorkersList.jsx - Directorio de Colaboradores.
@@ -43,6 +44,11 @@ export default function WorkersList() {
     /** Estado de carga durante el guardado de la edición. */
     const [isSaving, setIsSaving] = useState(false);
 
+    /** ====== NUEVOS ESTADOS PARA ARCHIVOS ====== */
+    const [editFiles, setEditFiles] = useState({});
+    const [editProfilePic, setEditProfilePic] = useState(null);
+    const [editProfilePicPreview, setEditProfilePicPreview] = useState(null);
+
     useEffect(() => { fetchWorkers(); }, []);
 
     /**
@@ -79,6 +85,32 @@ export default function WorkersList() {
             emergency_contact_phone: worker.emergency_contact_phone || '',
             allergies_comments: worker.allergies_comments || '',
         });
+
+        // Reset file states
+        setEditFiles({});
+        setEditProfilePic(null);
+        setEditProfilePicPreview(worker.profile_picture_url || null);
+    };
+
+    /**
+     * Callback para recibir archivos desde el componente FileUpload.
+     * 
+     * @param {string} id - Identificador del campo del archivo.
+     * @param {File} file - El archivo seleccionado.
+     */
+    const handleFileUpload = (id, file) => {
+        setEditFiles((prev) => ({ ...prev, [id]: file }));
+    };
+
+    /**
+     * Maneja la selección de la foto de perfil y genera su vista previa.
+     */
+    const handleProfilePicChange = (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+            const file = e.target.files[0];
+            setEditProfilePic(file);
+            setEditProfilePicPreview(URL.createObjectURL(file));
+        }
     };
 
     /**
@@ -86,14 +118,56 @@ export default function WorkersList() {
      */
     const saveEdit = async () => {
         setIsSaving(true);
+        const loadingToast = toast.loading('Guardando cambios...');
         try {
-            const { error } = await supabase.from('workers').update(editForm).eq('id', editWorker.id);
+            const uploadedUrls = {};
+
+            // Helper to upload a file to Supabase Storage
+            const uploadFile = async (bucket, file) => {
+                if (!file) return null;
+                const fileExt = file.name.split('.').pop();
+                const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
+
+                const { error } = await supabase.storage.from(bucket).upload(fileName, file);
+                if (error) throw error;
+
+                const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(fileName);
+                return publicData.publicUrl;
+            };
+
+            // Promise array for parallel uploads
+            const uploadPromises = Object.entries(editFiles).map(async ([id, file]) => {
+                const url = await uploadFile(id, file);
+                return { id, url };
+            });
+
+            // Add profile picture to upload queue if changed
+            if (editProfilePic) {
+                uploadPromises.push(uploadFile('profile_pictures', editProfilePic).then(url => ({ id: 'profile_picture', url })));
+            }
+
+            // Wait for all uploads to complete
+            const results = await Promise.all(uploadPromises);
+
+            results.forEach(({ id, url }) => {
+                uploadedUrls[`${id}_url`] = url;
+            });
+
+            // Merge form data with any new file URLs
+            const updatePayload = {
+                ...editForm,
+                ...uploadedUrls
+            };
+
+            const { error } = await supabase.from('workers').update(updatePayload).eq('id', editWorker.id);
             if (error) throw error;
-            setWorkers(prev => prev.map(w => w.id === editWorker.id ? { ...w, ...editForm } : w));
-            toast.success('Trabajador actualizado');
+
+            setWorkers(prev => prev.map(w => w.id === editWorker.id ? { ...w, ...updatePayload } : w));
+            toast.success('Trabajador actualizado', { id: loadingToast });
             setEditWorker(null);
         } catch (e) {
-            toast.error('Error al guardar cambios');
+            toast.error('Error al guardar cambios', { id: loadingToast });
+            console.error(e);
         } finally {
             setIsSaving(false);
         }
@@ -249,47 +323,90 @@ export default function WorkersList() {
                             </div>
 
                             {/* Modal body */}
-                            <div className="overflow-y-auto p-6 space-y-4 flex-1">
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label htmlFor="first_name" className="text-xs font-semibold text-gray-500 mb-1 block">Nombre</label>
-                                        <input id="first_name" {...field('first_name')} className={inputCls} placeholder="Nombre" />
-                                    </div>
-                                    <div>
-                                        <label htmlFor="last_name" className="text-xs font-semibold text-gray-500 mb-1 block">Apellido</label>
-                                        <input id="last_name" {...field('last_name')} className={inputCls} placeholder="Apellido" />
-                                    </div>
+                            <div className="overflow-y-auto p-6 space-y-6 flex-1">
+
+                                {/* Foto de Perfil */}
+                                <div className="flex flex-col items-center pb-4 border-b border-gray-100">
+                                    <label htmlFor="edit-profile-upload" className="cursor-pointer group relative">
+                                        <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-full overflow-hidden bg-gray-100 border-4 border-white shadow-md flex items-center justify-center relative">
+                                            {editProfilePicPreview ? (
+                                                <img src={editProfilePicPreview} alt="Vista previa del perfil" className="w-full h-full object-cover" />
+                                            ) : (
+                                                <svg className="w-16 h-16 mt-3 text-gray-300 group-hover:text-primary-400 transition-colors" fill="currentColor" viewBox="0 0 24 24">
+                                                    <path d="M24 20.993V24H0v-2.996A14.977 14.977 0 0112.004 15c4.904 0 9.26 2.354 11.996 5.993zM16.002 8.999a4 4 0 11-8 0 4 4 0 018 0z" />
+                                                </svg>
+                                            )}
+                                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <span className="text-white text-[10px] sm:text-xs font-semibold text-center leading-tight px-2">Cambiar Foto</span>
+                                            </div>
+                                        </div>
+                                    </label>
+                                    <input id="edit-profile-upload" type="file" accept="image/*" onChange={handleProfilePicChange} className="hidden" />
+                                    <p className="text-xs text-gray-500 mt-2 font-medium">Foto de Perfil</p>
                                 </div>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label htmlFor="dui" className="text-xs font-semibold text-gray-500 mb-1 block">DUI</label>
-                                        <input id="dui" {...field('dui_number')} className={inputCls} placeholder="00000000-0" />
-                                    </div>
-                                    <div>
-                                        <label htmlFor="phone" className="text-xs font-semibold text-gray-500 mb-1 block">Teléfono</label>
-                                        <input id="phone" {...field('phone_number')} className={inputCls} placeholder="7000-0000" />
-                                    </div>
-                                </div>
-                                <div>
-                                    <label htmlFor="address" className="text-xs font-semibold text-gray-500 mb-1 block">Dirección</label>
-                                    <input id="address" {...field('current_address')} className={inputCls} placeholder="Dirección actual" />
-                                </div>
-                                <div className="pt-1 border-t border-gray-100">
-                                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Contacto de emergencia</p>
+
+                                {/* Datos Personales */}
+                                <div className="space-y-4">
+                                    <p className="text-sm font-bold text-gray-900 border-b pb-2 mb-3">Datos Personales</p>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div>
-                                            <label htmlFor="emergency_name" className="text-xs font-semibold text-gray-500 mb-1 block">Nombre</label>
-                                            <input id="emergency_name" {...field('emergency_contact_name')} className={inputCls} placeholder="Nombre" />
+                                            <label htmlFor="first_name" className="text-xs font-semibold text-gray-500 mb-1 block">Nombre</label>
+                                            <input id="first_name" {...field('first_name')} className={inputCls} placeholder="Nombre" />
                                         </div>
                                         <div>
-                                            <label htmlFor="emergency_phone" className="text-xs font-semibold text-gray-500 mb-1 block">Teléfono</label>
-                                            <input id="emergency_phone" {...field('emergency_contact_phone')} className={inputCls} placeholder="7000-0000" />
+                                            <label htmlFor="last_name" className="text-xs font-semibold text-gray-500 mb-1 block">Apellido</label>
+                                            <input id="last_name" {...field('last_name')} className={inputCls} placeholder="Apellido" />
                                         </div>
                                     </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label htmlFor="dui" className="text-xs font-semibold text-gray-500 mb-1 block">DUI</label>
+                                            <input id="dui" {...field('dui_number')} className={inputCls} placeholder="00000000-0" />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="phone" className="text-xs font-semibold text-gray-500 mb-1 block">Teléfono</label>
+                                            <input id="phone" {...field('phone_number')} className={inputCls} placeholder="7000-0000" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label htmlFor="address" className="text-xs font-semibold text-gray-500 mb-1 block">Dirección</label>
+                                        <input id="address" {...field('current_address')} className={inputCls} placeholder="Dirección actual" />
+                                    </div>
+                                    <div className="pt-1 border-t border-gray-100">
+                                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Contacto de emergencia</p>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label htmlFor="emergency_name" className="text-xs font-semibold text-gray-500 mb-1 block">Nombre</label>
+                                                <input id="emergency_name" {...field('emergency_contact_name')} className={inputCls} placeholder="Nombre" />
+                                            </div>
+                                            <div>
+                                                <label htmlFor="emergency_phone" className="text-xs font-semibold text-gray-500 mb-1 block">Teléfono</label>
+                                                <input id="emergency_phone" {...field('emergency_contact_phone')} className={inputCls} placeholder="7000-0000" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label htmlFor="allergies" className="text-xs font-semibold text-gray-500 mb-1 block">Alergias / Comentarios médicos</label>
+                                        <textarea id="allergies" {...field('allergies_comments')} rows={2} className={`${inputCls} resize-none`} placeholder="Ninguna" />
+                                    </div>
                                 </div>
-                                <div>
-                                    <label htmlFor="allergies" className="text-xs font-semibold text-gray-500 mb-1 block">Alergias / Comentarios médicos</label>
-                                    <textarea id="allergies" {...field('allergies_comments')} rows={2} className={`${inputCls} resize-none`} placeholder="Ninguna" />
+
+                                {/* Seccion Documentos */}
+                                <div className="pt-2">
+                                    <p className="text-sm font-bold text-gray-900 border-b pb-2 mb-4">Actualizar Documentos</p>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                        <FileUpload id="dui_front" label="DUI Frontal" accept={{ 'image/jpeg': [], 'image/png': [] }} onUpload={handleFileUpload} file={editFiles['dui_front']} />
+                                        <FileUpload id="dui_back" label="DUI Reverso" accept={{ 'image/jpeg': [], 'image/png': [] }} onUpload={handleFileUpload} file={editFiles['dui_back']} />
+                                    </div>
+                                    <FileUpload id="nit" label="NIT" accept={{ 'image/jpeg': [], 'image/png': [], 'application/pdf': [] }} onUpload={handleFileUpload} file={editFiles['nit']} />
+                                    <FileUpload id="afp" label="AFP" accept={{ 'image/jpeg': [], 'image/png': [], 'application/pdf': [] }} onUpload={handleFileUpload} file={editFiles['afp']} />
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                        <FileUpload id="solvencia" label="Solvencia Policial" accept={{ 'image/jpeg': [], 'image/png': [], 'application/pdf': [] }} onUpload={handleFileUpload} file={editFiles['solvencia']} />
+                                        <FileUpload id="antecedentes" label="Antecedentes Penales" accept={{ 'image/jpeg': [], 'image/png': [], 'application/pdf': [] }} onUpload={handleFileUpload} file={editFiles['antecedentes']} />
+                                    </div>
+                                    <p className="text-xs text-amber-600 mt-2 bg-amber-50 p-2 rounded-lg border border-amber-100">
+                                        Nota: Solo adjunta los documentos que deseas actualizar. Los documentos no adjuntados conservarán su versión anterior.
+                                    </p>
                                 </div>
                             </div>
 
